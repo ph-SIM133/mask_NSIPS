@@ -1,0 +1,231 @@
+# Copyright (c) 2026 ph-SIM133
+# All rights reserved.
+# This software is for non-commercial use only.
+# -*- coding: utf-8 -*-
+import csv
+import os
+import glob
+import random
+import string
+import sys
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+
+# ==============================================================================
+# 変換用補助関数
+# ==============================================================================
+def mask_kanji(text, length=None):
+    if not text: return text
+    kanji_list = "東西南北春夏秋冬山川海空日月星草木花男女父母子兄弟姉妹一二三四五六七八九十"
+    L = length if length else len(text)
+    return "".join(random.choice(kanji_list) for _ in range(L))
+
+def mask_kana(text, length=None):
+    if not text: return text
+    kana_list = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ"
+    L = length if length else len(text)
+    return "".join(random.choice(kana_list) for _ in range(L))
+
+def mask_digits(text):
+    if not text: return text
+    res = ""
+    for c in text:
+        if c.isdigit() or c == '＠' or c == '@':
+            res += random.choice(string.digits)
+        else:
+            res += c
+    return res
+
+def mask_date(text):
+    if not text or not text.strip(): return text
+    return f"{random.randint(1960, 2023):04d}{random.randint(1, 12):02d}{random.randint(1, 28):02d}"
+
+# ==============================================================================
+# GUI アプリケーションクラス
+# ==============================================================================
+class NsipsMaskingApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("NSIPSデータ 匿名化ツール")
+        # ⚠️ 警告文の追加に伴い、画面が潰れないよう縦幅を 450 から 520 へ拡張
+        self.root.geometry("700x520")
+        
+        # 実行ファイルのディレクトリを取得
+        if getattr(sys, 'frozen', False):
+            self.base_dir = os.path.dirname(sys.executable)
+        else:
+            self.base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # デフォルトパス
+        self.default_input = os.path.join(self.base_dir, "A_Input")
+        self.default_output = os.path.join(self.base_dir, "B_Output")
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        # --- 入力フォルダ設定 ---
+        frame_in = tk.LabelFrame(self.root, text="入力フォルダ (NSIPSファイルがある場所)", padx=10, pady=5)
+        frame_in.pack(fill=tk.X, padx=10, pady=5)
+
+        # レイアウト崩れを防ぐためのインナーフレーム
+        row_in = tk.Frame(frame_in)
+        row_in.pack(fill=tk.X, expand=True)
+
+        self.var_input = tk.StringVar(value=self.default_input)
+        entry_in = tk.Entry(row_in, textvariable=self.var_input, width=50)
+        entry_in.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        btn_in = tk.Button(row_in, text="参照...", command=self.browse_input)
+        btn_in.pack(side=tk.RIGHT)
+
+        # ⚠️【大惨事防止の鉄則】視覚的に強烈なストップをかける真っ赤な警告文
+        warning_lbl = (
+            "⚠️【超重要・大惨事防止の鉄則】\n"
+            " レセコンが実際にNSIPSファイルを自動出力しているフォルダ（稼働中の本番フォルダ）は\n"
+            " 【絶対に直接指定しないでください】。ファイルロックの競合が発生し、レセコン側の\n"
+            " 会計システムがクラッシュしたり、データが消失するなどの致命的なトラブルの原因になります。\n"
+            " ※必ず、対象のNSIPSファイルを別の『安全な作業用フォルダ』へコピーしてから、その場所を指定してください。"
+        )
+        tk.Label(frame_in, text=warning_lbl, foreground="#DD2200", font=("", 9, "bold"), justify=tk.LEFT, anchor="w", padx=0, pady=5).pack(fill=tk.X)
+
+        # --- 出力フォルダ設定 ---
+        frame_out = tk.LabelFrame(self.root, text="出力フォルダ (マスキング後の保存先)", padx=10, pady=5)
+        frame_out.pack(fill=tk.X, padx=10, pady=5)
+
+        self.var_output = tk.StringVar(value=self.default_output)
+        entry_out = tk.Entry(frame_out, textvariable=self.var_output, width=50)
+        entry_out.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        btn_out = tk.Button(frame_out, text="参照...", command=self.browse_output)
+        btn_out.pack(side=tk.RIGHT)
+
+        # --- 実行ボタン ---
+        self.btn_execute = tk.Button(self.root, text="マスキング処理を開始", font=("", 12, "bold"), bg="#e0f7fa", command=self.start_processing)
+        self.btn_execute.pack(fill=tk.X, padx=10, pady=10, ipady=5)
+
+        # --- ログ表示 ---
+        frame_log = tk.LabelFrame(self.root, text="実行ログ", padx=10, pady=5)
+        frame_log.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.log_area = scrolledtext.ScrolledText(frame_log, state='disabled', height=8)
+        self.log_area.pack(fill=tk.BOTH, expand=True)
+    def browse_input(self):
+        d = filedialog.askdirectory(initialdir=self.var_input.get())
+        if d: self.var_input.set(d)
+
+    def browse_output(self):
+        d = filedialog.askdirectory(initialdir=self.var_output.get())
+        if d: self.var_output.set(d)
+
+    def log(self, message):
+        """ログエリアにメッセージを追記する"""
+        self.log_area.config(state='normal')
+        self.log_area.insert(tk.END, message + "\n")
+        self.log_area.see(tk.END)
+        self.log_area.config(state='disabled')
+
+    def start_processing(self):
+        """UIをブロックしないようにスレッドで処理を開始"""
+        in_dir = self.var_input.get()
+        out_dir = self.var_output.get()
+
+        if not in_dir or not out_dir:
+            messagebox.showwarning("確認", "入力・出力フォルダ両方を指定してください。")
+            return
+
+        # 実行中はボタンを無効化
+        self.btn_execute.config(state=tk.DISABLED)
+        self.log("=== 処理開始 ===")
+        
+        # バックグラウンドで実行
+        thread = threading.Thread(target=self.process_files, args=(in_dir, out_dir))
+        thread.start()
+
+    def process_files(self, in_dir, out_dir):
+        try:
+            if not os.path.exists(in_dir):
+                self.log(f"エラー: 入力フォルダが見つかりません。作成します。\n{in_dir}")
+                os.makedirs(in_dir, exist_ok=True)
+                
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir, exist_ok=True)
+                self.log(f"出力フォルダを作成しました: {out_dir}")
+
+            files = glob.glob(os.path.join(in_dir, "*.txt"))
+            
+            if not files:
+                self.log("対象のファイル(*.txt)が見つかりませんでした。")
+            else:
+                for file_path in files:
+                    output_path = os.path.join(out_dir, os.path.basename(file_path))
+                    self.mask_nsips_file(file_path, output_path)
+
+            self.log("=== 処理完了 ===")
+            messagebox.showinfo("完了", "マスキング処理が完了しました。")
+
+        except Exception as e:
+            self.log(f"予期せぬエラーが発生しました: {e}")
+            messagebox.showerror("エラー", f"エラーが発生しました:\n{e}")
+            
+        finally:
+            # 処理が終わったらボタンを有効化
+            self.btn_execute.config(state=tk.NORMAL)
+
+    def mask_nsips_file(self, input_file, output_file):
+        processed_rows = []
+        try:
+            with open(input_file, 'r', encoding='cp932', newline='') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if not row: continue
+                    rtype = row[0]
+
+                    # --- VER. ヘッダー ---
+                    if rtype.startswith("VER"):
+                        if len(row) > 6: row[6] = mask_digits(row[6])
+                        if len(row) > 7: row[7] = mask_kanji(row[7])
+                        if len(row) > 8: row[8] = mask_digits(row[8])
+                        if len(row) > 9: row[9] = mask_kanji(row[9])
+                        if len(row) > 10: row[10] = mask_digits(row[10])
+
+                    # --- 1. 患者情報 ---
+                    elif rtype == "1":
+                        if len(row) > 1: row[1] = mask_digits(row[1])
+                        if len(row) > 2: row[2] = mask_kana(row[2])
+                        if len(row) > 3: row[3] = mask_kanji(row[3])
+                        if len(row) > 5: row[5] = mask_date(row[5])
+                        if len(row) > 6: row[6] = mask_digits(row[6])
+                        if len(row) > 7: row[7] = mask_kanji(row[7])
+                        if len(row) > 8: row[8] = mask_digits(row[8])
+
+                    # --- 2. 医療機関・医師・薬剤師情報 ---
+                    elif rtype == "2":
+                        if len(row) > 1: row[1] = mask_digits(row[1])
+                        if len(row) > 12: row[12] = mask_digits(row[12])
+                        if len(row) > 14: row[14] = mask_kanji(row[14])
+                        if len(row) > 15: row[15] = mask_digits(row[15])
+                        if len(row) > 16: row[16] = mask_kanji(row[16])
+                        if len(row) > 17: row[17] = mask_digits(row[17])
+                        if len(row) > 23: row[23] = mask_kana(row[23])
+                        if len(row) > 24: row[24] = mask_kanji(row[24])
+                        if len(row) > 25: row[25] = mask_digits(row[25])
+                        if len(row) > 26: row[26] = mask_kanji(row[26])
+
+                    processed_rows.append(row)
+
+            # Shift-JIS で書き出し
+            with open(output_file, 'w', encoding='cp932', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerows(processed_rows)
+            
+            self.log(f"成功: {os.path.basename(input_file)}")
+            
+        except Exception as e:
+            self.log(f"失敗 ({os.path.basename(input_file)}): {e}")
+
+# ==============================================================================
+# メイン実行ブロック
+# ==============================================================================
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = NsipsMaskingApp(root)
+    root.mainloop()
